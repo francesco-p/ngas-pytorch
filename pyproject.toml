@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ngas-pytorch"
+version = "0.1.0"
+description = "PyTorch implementations of Neural Gas and Growing Neural Gas."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "torch>=2.1.0",
+]
+
+[tool.setuptools]
+packages = ["ngas", "ngas.models"]
