@@ -77,6 +77,40 @@ All models expose the same high-level workflow:
 
 Inputs are standard PyTorch tensors of shape `[N, D]`.
 
+`NeuralGas` and `InverseNeuralGas` also support online updates through `update(sample)`, which is useful for streaming data.
+
+## Streaming Example
+
+For `InverseNeuralGas`, you do not need to call `fit(...)` if your data arrives one sample at a time:
+
+```python
+import torch
+from ngas.models import InverseNeuralGas
+
+stream = [
+    torch.tensor([0.2, -0.1]),
+    torch.tensor([0.0, 0.3]),
+    torch.tensor([1.1, 0.9]),
+]
+
+# input_dim lets you initialize the model before the first sample arrives.
+model = InverseNeuralGas(
+    n_neurons=16,
+    lr=0.03,
+    max_edge_age=32,
+    distance="l2",
+    input_dim=2,
+)
+
+for sample in stream:
+    adj, weights = model.update(sample)
+
+print(weights.shape)                 # [16, 2]
+print(model.predict(torch.stack(stream)))
+```
+
+If you prefer, you can also omit `input_dim`; the first call to `update(sample)` will initialize the model automatically from that sample's dimension.
+
 ## Distances
 
 Supported distance names:
