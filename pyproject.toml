@@ -9,7 +9,6 @@ description = "PyTorch implementations of Neural Gas and Growing Neural Gas."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "matplotlib>=3.10.8",
     "torch>=2.1.0",
 ]
 
