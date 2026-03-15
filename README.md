@@ -4,29 +4,29 @@
   <img src="examples/banner.png" alt="ngas-pytorch banner" width="900">
 </p>
 
-Minimal PyTorch implementations of Neural Gas, Inverse Neural Gas, and Growing Neural Gas for topology-aware vector quantization and graph learning.
+PyTorch implementations of Neural Gas variants, including classical online models and differentiable models.
 
 ## Overview
 
-This repository provides lightweight PyTorch implementations of:
+This repository provides five supported models:
 
-- `NeuralGas`: the classical rank-based Neural Gas algorithm
-- `InverseNeuralGas`: an inverse-rank variant with `1 / rank^2` neighborhood weighting
-- `GrowingNeuralGas`: a graph-growing version that adapts both topology and model size
-
-The code is designed to stay small and easy to read while still being practical for experiments on CPU or GPU tensors.
+- `NeuralGas`: classical online Neural Gas with exponential rank neighborhood
+- `InverseNeuralGas`: online Neural Gas with inverse squared-rank neighborhood
+- `GrowingNeuralGas`: classical online GNG with explicit node insertion
+- `DifferentiableNeuralGas`: differentiable Neural Gas objective optimized by backpropagation
+- `DifferentiableGrowingNeuralGas`: differentiable GNG-style model with learnable topology and explicit `grow()`
 
 ## Install
-
-Install the library itself:
 
 ```bash
 pip install -e .
 ```
 
-The example notebooks install `matplotlib` inside the notebook so plotting stays out of the base package dependencies.
+The example notebooks install `matplotlib` inside notebook cells so plotting stays out of the base package dependencies.
 
 ## Quickstart
+
+Classical online family:
 
 ```python
 import torch
@@ -34,82 +34,86 @@ from ngas.models import GrowingNeuralGas, InverseNeuralGas, NeuralGas
 
 x = torch.randn(128, 2)
 
-# Classical Neural Gas
-ng = NeuralGas(
-    n_neurons=10,
-    lr=0.02,
-    max_edge_age=100,
-    distance="l2",
-)
+ng = NeuralGas(n_neurons=10, lr=0.02, max_edge_age=100, distance="l2")
 ng.fit(x, epochs=5)
-labels = ng.predict(x)
-print(ng.weights.shape)           # [10, 2]
-print(ng.quantization_error(x))   # average winner distance
+print(ng.weights.shape)
+print(ng.quantization_error(x))
 
-# Inverse-rank variant
-inv = InverseNeuralGas(
+seed_points = x[:10]
+ng_seeded = NeuralGas(
     n_neurons=10,
-    lr=0.02,
     max_edge_age=100,
     distance="l2",
+    init_points=seed_points,
 )
+
+inv = InverseNeuralGas(n_neurons=10, lr=0.02, max_edge_age=100, distance="l2")
 inv.fit(x, epochs=5)
 
-# Growing Neural Gas
-gng = GrowingNeuralGas(
-    max_neurons=32,
-    lambda_steps=50,
-    max_edge_age=100,
-    distance="l2",
-)
+gng = GrowingNeuralGas(max_neurons=32, lambda_steps=50, max_edge_age=100, distance="l2")
 gng.fit(x, epochs=3)
-print(gng.weights.shape)          # [<=32, 2]
+print(gng.weights.shape)
+```
+
+Differentiable family (`nn.Module` style with external optimizer):
+
+```python
+import torch
+from ngas.models import DifferentiableGrowingNeuralGas, DifferentiableNeuralGas
+
+x = torch.randn(256, 2)
+
+dng = DifferentiableNeuralGas(n_neurons=24, input_dim=2)
+opt = torch.optim.Adam(dng.parameters(), lr=0.03)
+for _ in range(100):
+    opt.zero_grad()
+    loss = dng(x)  # forward returns scalar loss
+    loss.backward()
+    opt.step()
+
+dgng = DifferentiableGrowingNeuralGas(max_neurons=32, input_dim=2, init_neurons=4)
+opt2 = torch.optim.Adam(dgng.parameters(), lr=0.02)
+for _ in range(50):
+    opt2.zero_grad()
+    loss = dgng(x)
+    loss.backward()
+    opt2.step()
+dgng.grow(n_new=2)
+
+seed_points = x[:6]
+dgng_seeded = DifferentiableGrowingNeuralGas(
+    max_neurons=32,
+    init_points=seed_points,
+)
 ```
 
 ## API Notes
 
-All models expose the same high-level workflow:
+Common convenience methods across families:
 
-1. Create a model with a distance metric and algorithm-specific hyperparameters.
-2. Call `fit(data, epochs=..., shuffle=True)`.
-3. Use `predict(data)` for winner assignments.
-4. Use `quantization_error(data)` as a compact quality metric.
+- `predict(data)` for winner assignments
+- `quantization_error(data)` for compact quality tracking
 
-Inputs are standard PyTorch tensors of shape `[N, D]`.
+All five models are exported from both `ngas.models` and top-level `ngas`.
 
-`NeuralGas` and `InverseNeuralGas` also support online updates through `update(sample)`, which is useful for streaming data.
+All five models also support optional constructor-time initialization from data:
 
-## Streaming Example
+- `init_points` accepts a tensor of starting neuron locations
+- fixed-size models require exactly one point per neuron
+- growing models start with all provided points active and may still grow later up to `max_neurons`
+- if `init_points` is omitted, current random / lazy initialization behavior is preserved
 
-For `InverseNeuralGas`, you do not need to call `fit(...)` if your data arrives one sample at a time:
+The model families intentionally differ in training style:
 
-```python
-import torch
-from ngas.models import InverseNeuralGas
-
-stream = [
-    torch.tensor([0.2, -0.1]),
-    torch.tensor([0.0, 0.3]),
-    torch.tensor([1.1, 0.9]),
-]
-
-# input_dim lets you initialize the model before the first sample arrives.
-model = InverseNeuralGas(
-    n_neurons=16,
-    lr=0.03,
-    max_edge_age=32,
-    distance="l2",
-    input_dim=2,
-)
-
-for sample in stream:
-    adj, weights = model.update(sample)
-
-print(weights.shape)                 # [16, 2]
-print(model.predict(torch.stack(stream)))
-```
-
-If you prefer, you can also omit `input_dim`; the first call to `update(sample)` will initialize the model automatically from that sample's dimension.
+- Classical family (`NeuralGas`, `InverseNeuralGas`, `GrowingNeuralGas`):
+  - online explicit updates
+  - `fit(...)` and `update(sample)` workflow
+  - graph/topology update happens during sample updates
+- Differentiable family (`DifferentiableNeuralGas`, `DifferentiableGrowingNeuralGas`):
+  - `nn.Module` + gradient descent workflow
+  - `forward(data)` returns scalar loss
+  - `forward(data, return_details=True)` returns diagnostics
+  - `DifferentiableGrowingNeuralGas.grow(...)` performs explicit structural growth
 
 ## Distances
 
@@ -119,7 +123,7 @@ Supported distance names:
 - `"sq_l2"` (alias: `"sqeuclidean"`)
 - `"cosine"` (alias: `"cos"`)
 
-These helpers are also available from the top-level package:
+Helpers are available at top-level:
 
 ```python
 from ngas import SUPPORTED_DISTANCES, normalize_distance_name, pairwise_distance
@@ -127,29 +131,19 @@ from ngas import SUPPORTED_DISTANCES, normalize_distance_name, pairwise_distance
 
 ## Examples
 
-Open either notebook from the repository root in Jupyter or VS Code:
+Open notebooks from the repository root:
 
 ```bash
-jupyter lab examples/neural_gas_blobs.ipynb
+jupyter lab examples/inverse_neural_gas_blobs.ipynb
 jupyter lab examples/growing_neural_gas_blobs.ipynb
+jupyter lab examples/differentiable_neural_gas_blobs.ipynb
+jupyter lab examples/differentiable_growing_neural_gas_blobs.ipynb
 ```
 
-Each notebook:
-
-- installs `matplotlib` in a notebook cell
-- trains the model on synthetic 2D blobs
-- prints summary metrics
-- renders the learned graph inline
-
-Reported metrics include:
-
-- `neurons` or `nodes`
-- `edges`
-- `quantization_error`
+All notebooks train on synthetic 2D blobs and render inline plots.  
+The differentiable Neural Gas notebook also includes an inline animation of prototype learning dynamics.
 
 ## References
-
-The implementations in this repository are based on the original papers:
 
 - Thomas Martinetz and Klaus Schulten, "A 'Neural-Gas' Network Learns Topologies," in *Artificial Neural Networks*, 1991. [PDF](https://www.ks.uiuc.edu/Publications/Papers/PDF/MART91B/MART91B.pdf)
 - Bernd Fritzke, "A Growing Neural Gas Network Learns Topologies," in *Advances in Neural Information Processing Systems 7*, 1994. [PDF](https://proceedings.neurips.cc/paper/1994/file/d56b9fc4b0f1be8871f5e1c40c0067e7-Paper.pdf)
@@ -161,7 +155,7 @@ If this repository helps your work, you can cite it as:
 ```bibtex
 @software{francesco_p_2026_ngas_pytorch,
   author = {francesco-p},
-  title = {ngas-pytorch: PyTorch implementations of Neural Gas and Growing Neural Gas},
+  title = {ngas-pytorch: PyTorch implementations of Neural Gas variants, including differentiable and growing models},
   year = {2026},
   url = {https://github.com/francesco-p/ngas-pytorch}
 }

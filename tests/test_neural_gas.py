@@ -12,6 +12,20 @@ class NeuralGasTests(unittest.TestCase):
         model = NeuralGas(n_neurons=10, lr=0.02, max_edge_age=100, distance="l2")
         self.assertEqual(model.n_neurons, 10)
 
+    def test_init_points_sets_weights_and_infers_dimension(self) -> None:
+        init_points = torch.randn(10, 3)
+        model = NeuralGas(n_neurons=10, max_edge_age=16, init_points=init_points)
+        self.assertEqual(model.input_dim, 3)
+        self.assertTrue(torch.allclose(model.weights, init_points))
+
+    def test_init_points_rejects_wrong_row_count(self) -> None:
+        with self.assertRaises(ValueError):
+            NeuralGas(n_neurons=10, max_edge_age=16, init_points=torch.randn(9, 2))
+
+    def test_init_points_rejects_dimension_conflict(self) -> None:
+        with self.assertRaises(ValueError):
+            NeuralGas(n_neurons=10, max_edge_age=16, input_dim=3, init_points=torch.randn(10, 2))
+
     def test_update_initializes_and_updates_shapes(self) -> None:
         torch.manual_seed(0)
         model = NeuralGas(n_neurons=8, lr=0.05, max_edge_age=16, distance="l2")
@@ -29,6 +43,20 @@ class NeuralGasTests(unittest.TestCase):
         before = model.weights.clone()
         model.fit(data[1:], epochs=2, shuffle=False)
 
+        self.assertFalse(torch.allclose(before, model.weights))
+
+    def test_fit_changes_weights_from_init_points(self) -> None:
+        torch.manual_seed(7)
+        data = torch.randn(32, 3)
+        model = NeuralGas(
+            n_neurons=6,
+            lr=0.05,
+            max_edge_age=8,
+            distance="sq_l2",
+            init_points=data[:6],
+        )
+        before = model.weights.clone()
+        model.fit(data[6:], epochs=2, shuffle=False)
         self.assertFalse(torch.allclose(before, model.weights))
 
     def test_predict_and_quantization_error(self) -> None:

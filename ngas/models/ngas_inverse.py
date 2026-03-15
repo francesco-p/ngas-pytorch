@@ -29,6 +29,7 @@ class InverseNeuralGas:
         max_edge_age: int = 64,
         distance: str = "l2",
         input_dim: int | None = None,
+        init_points: torch.Tensor | None = None,
         device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
         update_topology: bool = True,
@@ -43,6 +44,8 @@ class InverseNeuralGas:
             raise ValueError("input_dim must be >= 1 when provided.")
         if not isinstance(update_topology, bool):
             raise ValueError("update_topology must be a bool.")
+        if init_points is not None:
+            input_dim = self._validate_init_points(init_points, n_neurons, input_dim, dtype, device)
 
         self.config = NeuralGasConfig(
             n_neurons=n_neurons,
@@ -64,7 +67,9 @@ class InverseNeuralGas:
         )
         self._initialized = False
 
-        if input_dim is not None:
+        if init_points is not None:
+            self._initialize_from_points(init_points)
+        elif input_dim is not None:
             self._initialize(input_dim)
 
     @property
@@ -95,6 +100,36 @@ class InverseNeuralGas:
         self.adj.fill_(-1)
         self.adj.fill_diagonal_(-1)
         self._initialized = True
+
+    def _initialize_from_points(self, init_points: torch.Tensor) -> None:
+        points = torch.as_tensor(init_points, dtype=self.dtype, device=self.device)
+        self.weights = points.clone()
+        self.adj.fill_(-1)
+        self.adj.fill_diagonal_(-1)
+        self._initialized = True
+
+    @staticmethod
+    def _validate_init_points(
+        init_points: torch.Tensor,
+        n_neurons: int,
+        input_dim: int | None,
+        dtype: torch.dtype,
+        device: str | torch.device,
+    ) -> int:
+        points = torch.as_tensor(init_points, dtype=dtype, device=torch.device(device))
+        if points.dim() != 2:
+            raise ValueError("init_points must have shape [n_neurons, D].")
+        if points.size(0) != n_neurons:
+            raise ValueError(
+                f"init_points has {points.size(0)} rows, but model expects {n_neurons}."
+            )
+        if points.size(1) < 1:
+            raise ValueError("init_points must have at least one feature dimension.")
+        if input_dim is not None and points.size(1) != input_dim:
+            raise ValueError(
+                f"init_points has dimension {points.size(1)}, but input_dim={input_dim}."
+            )
+        return int(points.size(1))
 
     def _ensure_initialized(self, sample: torch.Tensor) -> None:
         if self._initialized:

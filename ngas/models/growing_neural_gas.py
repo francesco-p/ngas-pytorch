@@ -38,6 +38,7 @@ class GrowingNeuralGas:
         beta: float = 0.0005,
         distance: str = "l2",
         input_dim: int | None = None,
+        init_points: torch.Tensor | None = None,
         device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
     ) -> None:
@@ -61,6 +62,8 @@ class GrowingNeuralGas:
             raise ValueError("beta must be in [0, 1).")
         if input_dim is not None and input_dim < 1:
             raise ValueError("input_dim must be >= 1 when provided.")
+        if init_points is not None:
+            input_dim = self._validate_init_points(init_points, max_neurons, input_dim, dtype, device)
 
         self.config = GrowingNeuralGasConfig(
             max_neurons=max_neurons,
@@ -81,7 +84,9 @@ class GrowingNeuralGas:
         self.adj: torch.Tensor | None = None
         self._steps = 0
 
-        if input_dim is not None:
+        if init_points is not None:
+            self._initialize_from_points(init_points)
+        elif input_dim is not None:
             self._initialize(input_dim)
 
     @property
@@ -116,6 +121,51 @@ class GrowingNeuralGas:
         self.adj = torch.full((2, 2), -1, dtype=torch.int64, device=self.device)
         self.adj[0, 1] = 0
         self.adj[1, 0] = 0
+
+    def _initialize_from_points(self, init_points: torch.Tensor) -> None:
+        points = torch.as_tensor(init_points, dtype=self.dtype, device=self.device)
+        n_nodes = int(points.size(0))
+        self.weights = points.clone()
+        self.errors = torch.zeros(n_nodes, dtype=self.dtype, device=self.device)
+        self.adj = torch.full((n_nodes, n_nodes), -1, dtype=torch.int64, device=self.device)
+        self.adj.fill_diagonal_(-1)
+
+        if n_nodes == 2:
+            self.adj[0, 1] = 0
+            self.adj[1, 0] = 0
+            return
+
+        # Connect each initial node to its nearest neighbor so all provided
+        # points begin active without immediately collapsing as isolated nodes.
+        distances = pairwise_distance(points, points, distance="sq_l2")
+        distances.fill_diagonal_(float("inf"))
+        nearest = torch.argmin(distances, dim=1)
+        for i, j in enumerate(nearest.tolist()):
+            self.adj[i, j] = 0
+            self.adj[j, i] = 0
+
+    @staticmethod
+    def _validate_init_points(
+        init_points: torch.Tensor,
+        max_neurons: int,
+        input_dim: int | None,
+        dtype: torch.dtype,
+        device: str | torch.device,
+    ) -> int:
+        points = torch.as_tensor(init_points, dtype=dtype, device=torch.device(device))
+        if points.dim() != 2:
+            raise ValueError("init_points must have shape [K, D].")
+        if points.size(0) < 2 or points.size(0) > max_neurons:
+            raise ValueError(
+                f"init_points must contain between 2 and {max_neurons} rows."
+            )
+        if points.size(1) < 1:
+            raise ValueError("init_points must have at least one feature dimension.")
+        if input_dim is not None and points.size(1) != input_dim:
+            raise ValueError(
+                f"init_points has dimension {points.size(1)}, but input_dim={input_dim}."
+            )
+        return int(points.size(1))
 
     def _coerce_sample(self, sample: torch.Tensor) -> torch.Tensor:
         if not isinstance(sample, torch.Tensor):
